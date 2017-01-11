@@ -2,28 +2,9 @@
 	
 require_once 'lib/editor.inc.php';
 require_once 'lib/Weathermap.class.php';
-require_once 'lib/geometry.php';
-require_once 'lib/WMPoint.class.php';
-require_once 'lib/WMVector.class.php';
-require_once 'lib/WMLine.class.php';
 
 // so that you can't have the editor active, and not know about it.
 $ENABLED=false;
-
-// If we're embedded in the Cacti UI (included from weathermap-cacti-plugin-editor.php), then authentication has happened. Enable the editor.
-if (isset($FROM_CACTI) && $FROM_CACTI == true) {
-    $ENABLED = true;
-	$editor_name = "weathermap-cacti-plugin-editor.php";
-	$cacti_base = $config["base_path"];
-	$cacti_url = $config['url_path'];
-	$cacti_found = true;
-} else {
-    $FROM_CACTI = false;
-	$editor_name = "editor.php";
-	$cacti_base = '../../';
-	$cacti_url = '/';
-	$cacti_found = false;
-}
 
 if(! $ENABLED)
 {
@@ -34,8 +15,13 @@ if(! $ENABLED)
 
 // sensible defaults
 $mapdir='configs';
-$ignore_cacti=FALSE;
+$observium_base = '../../';
+$observium_url = '/';
+$ignore_observium=FALSE;
 $configerror = '';
+$whats_installed = '';
+
+$config_loaded = @include_once 'editor-config.php';
 
 // these are all set via the Editor Settings dialog, in the editor, now.
 $use_overlay = FALSE; // set to TRUE to enable experimental overlay showing VIAs
@@ -44,44 +30,57 @@ $grid_snap_value = 0; // set non-zero to snap to a grid of that spacing
 
 if( isset($_COOKIE['wmeditor']))
 {
-    $parts = explode(":",$_COOKIE['wmeditor']);
+    //$parts = preg_split(":",$_COOKIE['wmeditor']);
     
     if( (isset($parts[0])) && (intval($parts[0]) == 1) ) { $use_overlay = TRUE; }
     if( (isset($parts[1])) && (intval($parts[1]) == 1) ) { $use_relative_overlay = TRUE; }
     if( (isset($parts[2])) && (intval($parts[2]) != 0) ) { $grid_snap_value = intval($parts[2]); }   
 }
 
-if ($FROM_CACTI==false) {
+if( isset($config) )
+{
+    $configerror = 'OLD editor config file format. The format of this file changed in version 0.92 - please check the new editor-config.php-dist and update your editor-config.php file. [WMEDIT02]';
+}
 
 // check if the goalposts have moved
-if( is_dir($cacti_base) && file_exists($cacti_base."/include/global.php") )
+if( is_dir($observium_base) && file_exists($observium_base."/config.php") )
 {
 	// include the cacti-config, so we know about the database
-	include_once($cacti_base."/include/global.php");
-	$config['base_url'] = $cacti_url;
-	$cacti_found = TRUE;
-}
-elseif( is_dir($cacti_base) && file_exists($cacti_base."/include/config.php") )
-{
-	// include the cacti-config, so we know about the database
-	include_once($cacti_base."/include/config.php");
-
-	$config['base_url'] = $cacti_url;
-	$cacti_found = TRUE;
+	include_once($observium_base."/config.php");
+	include_once($observium_base."/includes/defaults.inc.php");
+	//include_once($observium_base."/includes/definitions.inc.php");
+	//include_once($observium_base."/includes/functions.php");
+	//include_once($observium_base."html/includes/functions.inc.php");
+	//include_once($observium_base."html/includes/authenticate.inc.php");
+	//$config['base_url'] = $cacti_url;
+	$observium_found = TRUE;
+        if($config['project_name'] == 'LibreNMS') {
+                $whats_installed = 'LibreNMS';
+        } else {
+                $whats_installed = 'Observium';
+        }
 }
 else
 {
-	$cacti_found = FALSE;
-}
+	$observium_found = FALSE;
 }
 
-chdir(dirname(__FILE__));
+//if ($_SESSION['userlevel'] < '5')
+//{
+//  include("$observium_base/html/includes/error-no-perm.inc.php");
+//} else {
+
+//if($observium_found && isset($plugins))
+//{
+//	# here, we know we're part of a plugin - do auth stuff
+//}
 
 if(! is_writable($mapdir))
 {
-	$configerror = "The map config directory ($mapdir) is not writable by the web server user. You will not be able to edit any files until this is corrected. [WMEDIT01]";
+	$configerror = "The map config directory is not writable by the web server user. You will not be able to edit any files until this is corrected. [WMEDIT01]";
 }
 
+chdir(dirname(__FILE__));
 
 $action = '';
 $mapname = '';
@@ -130,9 +129,6 @@ else
 	
 	$fromplug = FALSE;
 	if(isset($_REQUEST['plug']) && (intval($_REQUEST['plug'])==1) ) { $fromplug = TRUE; }
-	if($FROM_CACTI) {
-		$fromplug = TRUE;
-	}
 	
 	switch($action)
 	{
@@ -226,6 +222,16 @@ else
 	case 'show_config':
 		header('Content-type: text/plain');
 
+                // Temp fix for CVE-2013-3739 exploit
+                $check_base = realpath($mapdir);
+                $check_path = realpath($mapfile);
+                
+                if($check_path === false || strpos($check_path, $check_base) !== 0)
+                {
+                  echo('Bad mapname');
+                  exit();
+                  break;
+                }
 		$fd = fopen($mapfile,'r');
 		while (!feof($fd))
 		{
@@ -698,7 +704,7 @@ else
 					    # $log .= "Scale by $scalefactor along link-line";
 					    
 					    // rotate so that link is along the axis
-					    rotateAboutPoint($points,$pivx, $pivy, deg2rad($angle_old));
+					    RotateAboutPoint($points,$pivx, $pivy, deg2rad($angle_old));
 					    // do the scaling in here
 					    for($i=0; $i<(count($points)/2); $i++)
 					    {
@@ -706,7 +712,7 @@ else
 						    $points[$i*2] = $basex;
 					    }
 					    // rotate back so that link is along the new direction
-					    rotateAboutPoint($points,$pivx, $pivy, deg2rad(-$angle_new));
+					    RotateAboutPoint($points,$pivx, $pivy, deg2rad(-$angle_new));
 					    
 					    // now put the modified points back into the vialist again
 					    $v = 0; $i = 0;
@@ -731,56 +737,73 @@ else
 		}
 		break;
 
-
-	case "link_tidy":
+    case "link_align_horizontal":
 		$map->ReadConfig($mapfile);
 
 		$target = wm_editor_sanitize_name($_REQUEST['param']);
-
-		if(isset($map->links[$target])) {
-			// draw a map and throw it away, to calculate all the bounding boxes
-			$map->DrawMap('null');
-
-			tidy_link($map,$target);
-
-			$map->WriteConfig($mapfile);
+		
+		if(isset($map->links[target])) {
+		    $log = "align link ".$target;	
+		    
+		    $a_y = $map->links[$target]->a->y;
+		    $b_y = $map->links[$target]->b->y;
+		    
+		    $diff = $b_y - $a_y;
+		    $newoffset = "0:$diff";
+		    
+		    // if we've already done this once, try the other way around...
+		    if($map->links[$target]->a_offset == $newoffset)
+		    {
+			$diff = $a_y - $b_y;
+			$newoffset = "0:$diff";
+			$map->links[$target]->b_offset = $newoffset;
+			$map->links[$target]->a_offset = "C";
+		    }
+		    else
+		    {
+			// the standard thing
+			$map->links[$target]->a_offset = $newoffset;
+			$map->links[$target]->b_offset = "C";
+		    }     
+    
+		    $map->WriteConfig($mapfile);
 		}
-		break;
-	case "retidy":
+                break;
+
+    case "link_align_vertical":
 		$map->ReadConfig($mapfile);
 
-		// draw a map and throw it away, to calculate all the bounding boxes
-		$map->DrawMap('null');
-		retidy_links($map);
+		$target = wm_editor_sanitize_name($_REQUEST['param']);
+		
+		if(isset($map->links[target])) {		    
+		    $log = "align link ".$target;
+    
+		    $a_x = $map->links[$target]->a->x;
+		    $b_x = $map->links[$target]->b->x;
+		    
+		    $diff = $b_x - $a_x;
+		    $newoffset = "$diff:0";
+		    
+		    // if we've already done this once, try the other way around...
+		    if($map->links[$target]->a_offset == $newoffset)
+		    {
+			$diff = $a_x - $b_x;
+			$newoffset = "$diff:0";
+			$map->links[$target]->b_offset = $newoffset;
+			$map->links[$target]->a_offset = "C";
+		    }
+		    else
+		    {
+			// the standard thing
+			$map->links[$target]->a_offset = $newoffset;
+			$map->links[$target]->b_offset = "C";
+		    }     
+    
+		    $map->WriteConfig($mapfile);
+		}
+                break;
 
-		$map->WriteConfig($mapfile);
-
-		break;
-
-	case "retidy_all":
-		$map->ReadConfig($mapfile);
-
-		// draw a map and throw it away, to calculate all the bounding boxes
-		$map->DrawMap('null');
-		retidy_links($map,TRUE);
-
-		$map->WriteConfig($mapfile);
-
-		break;
-
-	case "untidy":
-		$map->ReadConfig($mapfile);
-
-		// draw a map and throw it away, to calculate all the bounding boxes
-		$map->DrawMap('null');
-		untidy_links($map);
-
-		$map->WriteConfig($mapfile);
-
-		break;
-
-
-		case "delete_link":
+	case "delete_link":
 		$map->ReadConfig($mapfile);
 
 		$target = wm_editor_sanitize_name($_REQUEST['param']);
@@ -879,10 +902,6 @@ else
 		    $node = new WeatherMapNode;
 		    $node->Reset($map);
 		    $node->CopyFrom($map->nodes[$target]);
-
-			# CopyFrom skips this one, because it's also the function used by template inheritance
-			# - but for Clone, we DO want to copy the template too
-			$node->template = $map->nodes[$target]->template;
     
 		    $node->name = $newnodename;
 		    $node->x += 30;
@@ -939,7 +958,7 @@ else
 <?php
 		// if the cacti config was included properly, then 
 		// this will be non-empty, and we can unhide the cacti links in the Link Properties box
-		if( ! isset($config['cacti_version']) )
+		if( ! isset($config['install_dir']) )
 		{
 			echo "    .cactilink { display: none; }\n";
 			echo "    .cactinode { display: none; }\n";
@@ -952,7 +971,6 @@ else
 	<script type="text/javascript">
 	
 	var fromplug=<?php echo ($fromplug==TRUE ? 1:0); ?>;
-	var editor_url = '<?php echo $editor_name; ?>';
 	
 	// the only javascript in here should be the objects representing the map itself
 	// all code should be in editor.js
@@ -991,20 +1009,14 @@ else
 	  <li class="tb_help"><span id="tb_help">or click a Node or Link to edit it's properties</span></li>
 	</ul>
   </div>
-  <form action="<?php echo $editor_name ?>" method="post" name="frmMain">
+  <form action="editor.php" method="post" name="frmMain">
 	<div align="center" id="mainarea">
 		<input type="hidden" name="plug" value="<?php echo ($fromplug==TRUE ? 1 : 0) ?>" />
 	 <input style="display:none" type="image"
 	  src="<?php echo $imageurl; ?>" id="xycapture" /><img src=
 	  "<?php echo $imageurl; ?>" id="existingdata" alt="Weathermap" usemap="#weathermap_imap"
 	   />
-	   <div class="debug"><p><strong>Debug:</strong>
-			   <a href="?<?php echo ($fromplug==TRUE ? 'plug=1&amp;' : ''); ?>action=retidy_all&amp;mapname=<?php echo  htmlspecialchars($mapname) ?>">Re-tidy ALL</a>
-			   <a href="?<?php echo ($fromplug==TRUE ? 'plug=1&amp;' : ''); ?>action=retidy&amp;mapname=<?php echo  htmlspecialchars($mapname) ?>">Re-tidy</a>
-			   <a href="?<?php echo ($fromplug==TRUE ? 'plug=1&amp;' : ''); ?>action=untidy&amp;mapname=<?php echo  htmlspecialchars($mapname) ?>">Un-tidy</a>
-
-
-			   <a href="?<?php echo ($fromplug==TRUE ? 'plug=1&amp;' : ''); ?>action=nothing&amp;mapname=<?php echo  htmlspecialchars($mapname) ?>">Do Nothing</a>
+	   <div class="debug"><p><strong>Debug:</strong> <a href="?<?php echo ($fromplug==TRUE ? 'plug=1&amp;' : ''); ?>action=nothing&amp;mapname=<?php echo  htmlspecialchars($mapname) ?>">Do Nothing</a> 
 	   <span><label for="mapname">mapfile</label><input type="text" name="mapname" value="<?php echo htmlspecialchars($mapname); ?>" /></span>
 	   <span><label for="action">action</label><input type="text" id="action" name="action" value="<?php echo htmlspecialchars($newaction); ?>" /></span>
 	  <span><label for="param">param</label><input type="text" name="param" id="param" value="" /></span>
@@ -1061,7 +1073,7 @@ else
 		  <tr>
 			<th>'Hover' Graph URL</th>
 			<td><input id="node_hover" name="node_hover" type="text" />
-			<span class="cactinode"><a id="node_cactipick">[Pick from Cacti]</a></span></td>
+			<span class="cactinode"><a id="node_observiumpick">[Pick from <?php echo $whats_installed?>]</a></span></td>
 		  </tr>
 		  <tr>
 			<th>Icon Filename</th>
@@ -1120,7 +1132,7 @@ else
 
 	  <div class="dlgBody">
 		<div class="comment">
-		  Link from '<span id="link_nodename1">%NODE1%</span>' to '<span id="link_nodename2">%NODE2%</span>'
+		  Link from '<span id="link_nodename1">%NAME2%</span>' to '<span id="link_nodename2">%NODE2%</span>'
 		</div>
 
 		<input size="6" name="link_name" type="hidden" />
@@ -1142,8 +1154,8 @@ else
 			</tr>
 			<tr>
 			  <th>Data Source</th>
-			  <td><input id="link_target" name="link_target" type="text" /> <span class="cactilink"><a id="link_cactipick">[Pick
-			  from Cacti]</a></span></td>
+			  <td><input id="link_target" name="link_target" type="text" /> <span class="observiumlink"><a id="link_observiumpick">[Pick
+			  from <?php echo $whats_installed?>]</a></span></td>
 			</tr>
 			<tr>
 			  <th>Link Width</th>
@@ -1194,7 +1206,8 @@ else
 			  <th></th>
 			  <td><a class="dlgTitlebar" id="link_delete">Delete
 			  Link</a><a class="dlgTitlebar" id="link_edit">Edit</a><a
-					  class="dlgTitlebar" id="link_tidy">Tidy</a><a
+                            class="dlgTitlebar" id="link_vert">Vert</a><a
+                            class="dlgTitlebar" id="link_horiz">Horiz</a><a 
 							class="dlgTitlebar" id="link_via">Via</a> 
                         </td>
 			</tr>
@@ -1501,4 +1514,5 @@ else
 <?php
 } // if mapname != ''
 // vim:ts=4:sw=4:
+//}
 ?>
